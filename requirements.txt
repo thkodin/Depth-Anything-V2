@@ -1,6 +1,12 @@
 gradio_imageslider
 gradio==4.29.0
 matplotlib
+black
+isort
+mypy
 opencv-python
-torch
-torchvision
+natsort
+h5py
+tensorboard
+# torch
+# torchvision
