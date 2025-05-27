@@ -378,7 +378,9 @@ if __name__ == "__main__":
         if save_pcds:
             # Convert depth back to meters for point cloud generation.
             depth_meters = depth / depth_scale
-            points, colors = create_point_cloud(depth_meters, intrinsics, original_image)
+            points, colors = create_point_cloud(
+                depth_meters, intrinsics, cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+            )
             save_point_cloud(points, colors, dir_pcd / f"{path_color.stem}.ply")
 
     with open(path_depth_scale, "w") as f:
