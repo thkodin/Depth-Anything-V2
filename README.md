@@ -19,8 +19,8 @@ This work presents Depth Anything V2. It significantly outperforms [V1](https://
 
 ![teaser](assets/teaser.png)
 
-
 ## News
+
 - **2025-01-22:** [Video Depth Anything](https://videodepthanything.github.io) has been released. It generates consistent depth maps for super-long videos (e.g., over 5 minutes).
 - **2024-12-22:** [Prompt Depth Anything](https://promptda.github.io/) has been released. It supports 4K resolution metric depth estimation when low-res LiDAR is used to prompt the DA models.
 - **2024-07-06:** Depth Anything V2 is supported in [Transformers](https://github.com/huggingface/transformers/). See the [instructions](https://huggingface.co/docs/transformers/main/en/model_doc/depth_anything_v2) for convenient usage.
@@ -28,7 +28,6 @@ This work presents Depth Anything V2. It significantly outperforms [V1](https://
 - **2024-06-22:** We release [smaller metric depth models](https://github.com/DepthAnything/Depth-Anything-V2/tree/main/metric_depth#pre-trained-models) based on Depth-Anything-V2-Small and Base.
 - **2024-06-20:** Our repository and project page are flagged by GitHub and removed from the public for 6 days. Sorry for the inconvenience.
 - **2024-06-14:** Paper, project page, code, models, demo, and benchmark are all released.
-
 
 ## Pre-trained Models
 
@@ -40,7 +39,6 @@ We provide **four models** of varying scales for robust relative depth estimatio
 | Depth-Anything-V2-Base | 97.5M | [Download](https://huggingface.co/depth-anything/Depth-Anything-V2-Base/resolve/main/depth_anything_v2_vitb.pth?download=true) |
 | Depth-Anything-V2-Large | 335.3M | [Download](https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth?download=true) |
 | Depth-Anything-V2-Giant | 1.3B | Coming soon |
-
 
 ## Usage
 
@@ -55,6 +53,7 @@ pip install -r requirements.txt
 Download the checkpoints listed [here](#pre-trained-models) and put them under the `checkpoints` directory.
 
 ### Use our models
+
 ```python
 import cv2
 import torch
@@ -84,6 +83,7 @@ If you do not want to clone this repository, you can also load our models throug
 
 - Note 1: Make sure you can connect to Hugging Face and have installed the latest Transformers.
 - Note 2: Due to the [upsampling difference](https://github.com/huggingface/transformers/pull/31522#issuecomment-2184123463) between OpenCV (we used) and Pillow (HF used), predictions may differ slightly. So you are more recommended to use our models through the way introduced above.
+
 ```python
 from transformers import pipeline
 from PIL import Image
@@ -98,18 +98,21 @@ depth = pipe(image)["depth"]
 ```bash
 python run.py \
   --encoder <vits | vitb | vitl | vitg> \
-  --img-path <path> --outdir <outdir> \
+  --path-color <path> --outdir <outdir> \
   [--input-size <size>] [--pred-only] [--grayscale]
 ```
+
 Options:
-- `--img-path`: You can either 1) point it to an image directory storing all interested images, 2) point it to a single image, or 3) point it to a text file storing all image paths.
+
+- `--path-color`: You can either 1) point it to an image directory storing all interested images, 2) point it to a single image, or 3) point it to a text file storing all image paths.
 - `--input-size` (optional): By default, we use input size `518` for model inference. ***You can increase the size for even more fine-grained results.***
 - `--pred-only` (optional): Only save the predicted depth map, without raw image.
 - `--grayscale` (optional): Save the grayscale depth map, without applying color palette.
 
 For example:
+
 ```bash
-python run.py --encoder vitl --img-path assets/examples --outdir depth_vis
+python run.py --encoder vitl --path-color assets/examples --outdir depth_vis
 ```
 
 ### Running script on *videos*
@@ -135,38 +138,34 @@ You can also try our [online demo](https://huggingface.co/spaces/Depth-Anything/
 
 ***Note: Compared to V1, we have made a minor modification to the DINOv2-DPT architecture (originating from this [issue](https://github.com/LiheYoung/Depth-Anything/issues/81)).*** In V1, we *unintentionally* used features from the last four layers of DINOv2 for decoding. In V2, we use [intermediate features](https://github.com/DepthAnything/Depth-Anything-V2/blob/2cbc36a8ce2cec41d38ee51153f112e87c8e42d8/depth_anything_v2/dpt.py#L164-L169) instead. Although this modification did not improve details or accuracy, we decided to follow this common practice.
 
-
 ## Fine-tuned to Metric Depth Estimation
 
 Please refer to [metric depth estimation](./metric_depth).
 
-
 ## DA-2K Evaluation Benchmark
 
 Please refer to [DA-2K benchmark](./DA-2K.md).
-
 
 ## Community Support
 
 **We sincerely appreciate all the community support for our Depth Anything series. Thank you a lot!**
 
 - Apple Core ML:
-    - https://developer.apple.com/machine-learning/models
-    - https://huggingface.co/apple/coreml-depth-anything-v2-small
-    - https://huggingface.co/apple/coreml-depth-anything-small
+  - <https://developer.apple.com/machine-learning/models>
+  - <https://huggingface.co/apple/coreml-depth-anything-v2-small>
+  - <https://huggingface.co/apple/coreml-depth-anything-small>
 - Transformers:
-    - https://huggingface.co/docs/transformers/main/en/model_doc/depth_anything_v2
-    - https://huggingface.co/docs/transformers/main/en/model_doc/depth_anything
+  - <https://huggingface.co/docs/transformers/main/en/model_doc/depth_anything_v2>
+  - <https://huggingface.co/docs/transformers/main/en/model_doc/depth_anything>
 - TensorRT:
-    - https://github.com/spacewalk01/depth-anything-tensorrt
-    - https://github.com/zhujiajian98/Depth-Anythingv2-TensorRT-python
-- ONNX: https://github.com/fabio-sim/Depth-Anything-ONNX
-- ComfyUI: https://github.com/kijai/ComfyUI-DepthAnythingV2
-- Transformers.js (real-time depth in web): https://huggingface.co/spaces/Xenova/webgpu-realtime-depth-estimation
+  - <https://github.com/spacewalk01/depth-anything-tensorrt>
+  - <https://github.com/zhujiajian98/Depth-Anythingv2-TensorRT-python>
+- ONNX: <https://github.com/fabio-sim/Depth-Anything-ONNX>
+- ComfyUI: <https://github.com/kijai/ComfyUI-DepthAnythingV2>
+- Transformers.js (real-time depth in web): <https://huggingface.co/spaces/Xenova/webgpu-realtime-depth-estimation>
 - Android:
-  - https://github.com/shubham0204/Depth-Anything-Android
-  - https://github.com/FeiGeChuanShu/ncnn-android-depth_anything
-
+  - <https://github.com/shubham0204/Depth-Anything-Android>
+  - <https://github.com/FeiGeChuanShu/ncnn-android-depth_anything>
 
 ## Acknowledgement
 
@@ -174,11 +173,9 @@ We are sincerely grateful to the awesome Hugging Face team ([@Pedro Cuenca](http
 
 We also thank the [DINOv2](https://github.com/facebookresearch/dinov2) team for contributing such impressive models to our community.
 
-
 ## LICENSE
 
 Depth-Anything-V2-Small model is under the Apache-2.0 license. Depth-Anything-V2-Base/Large/Giant models are under the CC-BY-NC-4.0 license.
-
 
 ## Citation
 
@@ -193,7 +190,7 @@ If you find this project useful, please consider citing:
 }
 
 @inproceedings{depth_anything_v1,
-  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data}, 
+  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data},
   author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
   booktitle={CVPR},
   year={2024}

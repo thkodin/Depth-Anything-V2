@@ -4,7 +4,6 @@
 
 We here provide a simple codebase to fine-tune our Depth Anything V2 pre-trained encoder for metric depth estimation. Built on our powerful encoder, we use a simple DPT head to regress the depth. We fine-tune our pre-trained encoder on synthetic Hypersim / Virtual KITTI datasets for indoor / outdoor metric depth estimation, respectively.
 
-
 # Pre-trained Models
 
 We provide **six metric depth models** of three scales for indoor and outdoor scenes, respectively.
@@ -30,6 +29,7 @@ pip install -r requirements.txt
 Download the checkpoints listed [here](#pre-trained-models) and put them under the `checkpoints` directory.
 
 ### Use our models
+
 ```python
 import cv2
 import torch
@@ -64,24 +64,24 @@ python run.py \
   --encoder vitl \
   --load-from checkpoints/depth_anything_v2_metric_hypersim_vitl.pth \
   --max-depth 20 \
-  --img-path <path> --outdir <outdir> [--input-size <size>] [--save-numpy]
+  --path-color <path> --outdir <outdir> [--input-size <size>] [--save-numpy]
 
 # outdoor scenes
 python run.py \
   --encoder vitl \
   --load-from checkpoints/depth_anything_v2_metric_vkitti_vitl.pth \
   --max-depth 80 \
-  --img-path <path> --outdir <outdir> [--input-size <size>] [--save-numpy]
+  --path-color <path> --outdir <outdir> [--input-size <size>] [--save-numpy]
 ```
 
-### Project 2D images to point clouds:
+### Project 2D images to point clouds
 
 ```bash
 python depth_to_pointcloud.py \
   --encoder vitl \
   --load-from checkpoints/depth_anything_v2_metric_hypersim_vitl.pth \
   --max-depth 20 \
-  --img-path <path> --outdir <outdir>
+  --path-color <path> --outdir <outdir>
 ```
 
 ### Reproduce training
@@ -91,7 +91,6 @@ Please first prepare the [Hypersim](https://github.com/apple/ml-hypersim) and [V
 ```bash
 bash dist_train.sh
 ```
-
 
 ## Citation
 
@@ -106,7 +105,7 @@ If you find this project useful, please consider citing:
 }
 
 @inproceedings{depth_anything_v1,
-  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data}, 
+  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data},
   author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
   booktitle={CVPR},
   year={2024}

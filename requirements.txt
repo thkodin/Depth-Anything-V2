@@ -8,5 +8,6 @@ opencv-python
 natsort
 h5py
 tensorboard
+openpyxl
 # torch
 # torchvision

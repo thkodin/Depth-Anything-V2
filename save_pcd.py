@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
+from textwrap import dedent
 from warnings import warn
 
 import cv2
@@ -16,51 +17,45 @@ VALID_DEPTH_EXTENSIONS = VALID_IMG_EXTENSIONS | VALID_DEPTH_MAP_EXTENSIONS
 
 
 @dataclass
-class ImageSet:
-    depth_path: Path
-    color_path: Path | None = None
+class PcdImagePair:
+    path_depth: Path
+    path_color: Path | None = None
     is_raw_depth: bool = False
 
 
-def parse():
+def parse_args():
     parser = argparse.ArgumentParser(
-        description="Save point cloud given a depth map (if corresponding color image is provided).",
+        description="Save point cloud given a depth map (colored PCD if corresponding color image is provided).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--input-dir",
+        "--path-depth",
         type=str,
+        required=True,
+        help="Path to depth image (.png/.jpg/.jpeg) or map (.npy format).",
+        metavar="str",
+    )
+    parser.add_argument(
+        "--intrinsics",
+        type=float,
+        nargs="+",
+        required=True,
         help=(
-            "Path to input directory. Must contain a folder 'depth/' containing either the normalized depth images"
-            " (.png/.jpg/.jpeg) or maps (.npy format, raw numpy arrays representing raw metric depth values) and"
-            " optionally (for colored point clouds) 'color/' containing color images. If 'depth/' is not found, assumes"
-            " that depth images are present in the input directory itself. REQUIRED if --depth is not provided."
+            "Camera intrinsics [fx, fy, cx, cy] in that order. If one argument provided, fx and fy are both set equal"
+            " to it and cx and cy are inferred from the image dimensions (width and height respectively). If 2 are"
+            " provided, fx and fy are populated, and cx and cy are inferred from the image dimensions. If 3 are"
+            " provided, cy is inferred from the image height. If 4 are provided, all values are populated."
         ),
-        metavar="str",
+        metavar="float",
     )
     parser.add_argument(
-        "--depth",
+        "--path-color",
         type=str,
-        help=(
-            "Path to depth image (.png/.jpg/.jpeg) or map (.npy format). REQUIRED if --input-dir is not provided."
-            " IGNORED if --input-dir is provided."
-        ),
+        help="Path to color image (RGB). If provided, the point cloud will be colored.",
         metavar="str",
     )
     parser.add_argument(
-        "--color",
-        type=str,
-        help="Path to color image (RGB). IGNORED if --input-dir is provided.",
-        metavar="str",
-    )
-    parser.add_argument(
-        "--load-depth-maps",
-        action="store_true",
-        default=False,
-        help="Read raw depth maps instead of images (.npy format instead of .png/.jpg/.jpeg).",
-    )
-    parser.add_argument(
-        "--output-dir",
+        "--dir-output",
         type=str,
         help=(
             "Path to output directory containing the point cloud data as PLY files. Defaults to 'pcd/YYYYMMDD_HHMMSS/'"
@@ -68,66 +63,120 @@ def parse():
         metavar="str",
     )
     parser.add_argument(
-        "--depth-scale-file",
-        type=str,
-        help=(
-            "Path to file containing depth scale factors for each depth image as a JSON object representing a"
-            " dictionary of the form {depth_image_filename: depth_scale_factor}. REQUIRED if --depth-scale is not"
-            " provided. IGNORED if --depth-scale is provided."
-        ),
-        metavar="str",
+        "--load-depth-map",
+        action="store_true",
+        default=False,
+        help="Read raw depth maps instead of images (.npy format instead of .png/.jpg/.jpeg).",
     )
     parser.add_argument(
         "--depth-scale",
         type=float,
         default=1.0,
         help=(
-            "Ground truth fixed depth scale factor. Where depth_image_px / depth_scale = depth_image_meters. REQUIRED"
-            " if --depth-scale-file is not provided."
+            "Fixed depth scale factor. Where depth_image_px / depth_scale = depth_image_meters. IGNORED if"
+            " --path-depth-scale is provided."
         ),
         metavar="float",
     )
     parser.add_argument(
-        "--intrinsics",
-        type=float,
-        nargs=4,
-        # Default to canonical camera intrinsics (cx and cy are half the image size, which is given in H, W format, so
-        # the reverse order represents the typical u, v coordinates for the principal point).
-        default=[320.0, 320.0, 320.0, 320.0],
-        help="Camera intrinsics [fx, fy, cx, cy].",
-        metavar="float",
+        "--path-depth-scale",
+        type=str,
+        help=(
+            "Path to file containing depth scale factors for each depth image as a JSON object representing a"
+            " dictionary of the form {depth_image_filename: depth_scale_factor}. OVERRIDES --depth-scale."
+        ),
+        metavar="str",
     )
     parser.add_argument(
         "--match-threshold",
         type=float,
         default=0.1,
         help="Match threshold for associating depth and normal images to color images based on filename similarity.",
+        metavar="float",
     )
     parser.add_argument(
-        "--image-center-as-principal-point",
+        "--recursive-search-input-directories",
+        action="store_true",
+        help="Search recursively through each input directory.",
+    )
+    parser.add_argument(
+        "--pcd-image-center-as-principal-point",
         action="store_true",
         help="Use the image center as the principal point instead of the value provided in intrinsics.",
     )
 
-    # Verify that one of the mandatory input arguments is provided.
+    # Parse arguments.
     args = parser.parse_args()
-    if args.input_dir is None and args.depth is None:
-        parser.error("Either --input-dir or --depth must be provided.")
+
+    # Validate intrinsics.
+    match len(args.intrinsics):
+        case 1:
+            args.intrinsics.extend([args.intrinsics[0], None, None])
+        case 2:
+            args.intrinsics.extend([None, None])
+        case 3:
+            args.intrinsics.append(None)
+        case 4:
+            pass
+        case _:
+            parser.error("--intrinsics must have between 1 and 4 values.")
 
     return args
 
+def directory_tree_search(path: Path, extensions: set[str] | None = None, recursive: bool = True):
+    """
+    Iteratively search for all files with the specified extensions in the directory tree.
 
-def find_best_match(target: str, candidates: list[str], match_threshold: float = 0.1) -> str | None:
+    Args:
+        path: The root path to start searching from.
+        extensions: Set of file extensions to filter by. If None, uses VALID_IMG_EXTENSIONS.
+        recursive: Whether to search recursively through subdirectories.
+    """
+    # Use default extensions if none provided.
+    if extensions is None:
+        extensions = set()
+
+    filenames = []
+    stack = [path]
+
+    while stack:
+        item = stack.pop()
+        if item.is_file():
+            # Add file if no extensions specified or if extension matches.
+            if not extensions or item.suffix.lower() in extensions:
+                filenames.append(item)
+        elif item.is_dir():
+            for entry in item.iterdir():
+                if entry.is_file():
+                    # Add file if no extensions specified or if extension matches.
+                    if not extensions or entry.suffix.lower() in extensions:
+                        filenames.append(entry)
+                elif entry.is_dir() and recursive:
+                    stack.append(entry)
+        else:
+            raise RuntimeError(f"is not file or directory: {item}")
+
+    return filenames
+
+def find_best_path_name_match(target: str, candidates: list[str], match_threshold: float = 0.1) -> str | None:
     """
     Find the best matching filename from candidates using fuzzy string matching.
 
     Args:
         target: The target filename to match against.
         candidates: List of candidate filenames.
+        match_threshold: Minimum similarity ratio for a match.
 
     Returns:
         Best matching filename or None if no good match found.
     """
+    if match_threshold < 0 or match_threshold > 1:
+        raise ValueError(f"Invalid match threshold: {match_threshold}")
+
+    # early return if no candidates.
+    if not candidates:
+        return None
+
     # Only match filename based on stem (no extensions).
     target_stem = Path(target).stem
 
@@ -143,12 +192,12 @@ def find_best_match(target: str, candidates: list[str], match_threshold: float =
     for candidate in candidates:
         candidate_stem = Path(candidate).stem
         ratio = SequenceMatcher(None, target_stem, candidate_stem).ratio()
-        if ratio == best_ratio and best_match is not None:
-            warn(
-                f"Filenames tied during match-based association: {Path(candidate).stem} (CURRENT) =="
-                f" {Path(best_match).stem} (BEST). Will stick with BEST (older) one assuming filenames were sorted,"
-                " such that this was the first best match."
-            )
+        # if ratio == best_ratio and best_match is not None:
+        #     warn(
+        #         f"Filenames tied during match-based association: {Path(candidate).stem} (CURRENT) =="
+        #         f" {Path(best_match).stem} (BEST). Will stick with BEST (older) one assuming filenames were sorted,"
+        #         " such that this was the first best match."
+        #     )
         if ratio > best_ratio:
             best_ratio = ratio
             best_match = candidate
@@ -157,56 +206,55 @@ def find_best_match(target: str, candidates: list[str], match_threshold: float =
     return best_match if best_ratio > match_threshold else None
 
 
-def associate_images(input_dir: Path, match_threshold: float = 0.5, load_depth_maps: bool = False) -> list[ImageSet]:
+def associate_images_for_pcd(
+    dir_depth: Path, dir_color: Path | None = None, match_threshold: float = 0.5, load_depth_map: bool = False, recursive: bool = True
+) -> list[PcdImagePair]:
     """
     Find any corresponding color images given depth images in the input directory.
 
     Args:
-        input_dir: Input directory path.
-        match_threshold: Match threshold for associating depth and normal images to color images based on filename
-            similarity.
-        load_depth_maps: Whether to load depth maps instead of color images.
+        dir_depth: Depth directory path.
+        dir_color: Color directory path. May be None if only depth images are provided.
+        match_threshold: Match threshold for associating depth images to color images based on filename similarity.
+        load_depth_map: Whether to load raw depth maps instead of scaled depth images.
+        recursive: Whether to search recursively through the input directories.
 
     Returns:
-        List of ImageSet objects containing associated file paths.
+        List of PcdImagePair objects containing associated file paths.
     """
-    # Check directory structure.
-    depth_dir = input_dir / "depth"
-    color_dir = input_dir / "color"
+    if not dir_depth.is_dir():
+        raise FileNotFoundError(f"Depth images directory not found: {dir_depth}")
 
     # Get list of depth images.
-    if depth_dir.exists():
-        depth_files = natsorted(f for f in depth_dir.iterdir() if f.suffix.lower() in VALID_DEPTH_EXTENSIONS)
-        if load_depth_maps:
-            # Keep just the .npy files.
-            depth_files = [f for f in depth_files if f.suffix.lower() in VALID_DEPTH_MAP_EXTENSIONS]
-        else:
-            # Keep just the .png/.jpg/.jpeg files.
-            depth_files = [f for f in depth_files if f.suffix.lower() in VALID_IMG_EXTENSIONS]
+    paths_depth = natsorted(directory_tree_search(dir_depth, extensions=VALID_DEPTH_EXTENSIONS, recursive=recursive))
+    if load_depth_map:
+        # Keep just the .npy files.
+        paths_depth = [f for f in paths_depth if f.suffix.lower() in VALID_DEPTH_MAP_EXTENSIONS]
     else:
-        # Look for depth images in the input directory itself instead.
-        depth_files = natsorted(f for f in input_dir.iterdir() if f.suffix.lower() in VALID_DEPTH_EXTENSIONS)
-        depth_dir = input_dir
+        # Keep just the .png/.jpg/.jpeg files.
+        paths_depth = [f for f in paths_depth if f.suffix.lower() in VALID_IMG_EXTENSIONS]
 
-    # Get color files if directories exist.
-    color_files = []
-    if color_dir.exists():
-        color_files = natsorted(str(f) for f in color_dir.iterdir() if f.suffix.lower() in VALID_IMG_EXTENSIONS)
+    # Get color files if directory exists.
+    paths_color = []
+    if dir_color is not None:
+        if not dir_color.is_dir():
+            raise FileNotFoundError(f"Color images directory not found: {dir_color}")
+        paths_color = natsorted(directory_tree_search(dir_color, extensions=VALID_IMG_EXTENSIONS, recursive=recursive))
 
     # Associate files.
     image_sets = []
-    for depth_path in depth_files:
-        color_path = None
+    for path_depth in paths_depth:
+        path_color = None
 
-        if color_files:
-            color_match = find_best_match(
-                depth_path.name, [Path(f).name for f in color_files], match_threshold=match_threshold
+        if paths_color:
+            matched_path_color = find_best_path_name_match(
+                path_depth.name, [f.name for f in paths_color], match_threshold=match_threshold
             )
-            if color_match:
-                color_path = color_dir / color_match
+            if matched_path_color:
+                path_color = dir_color / matched_path_color
 
         image_sets.append(
-            ImageSet(depth_path, color_path, is_raw_depth=depth_path.suffix.lower() in VALID_DEPTH_MAP_EXTENSIONS)
+            PcdImagePair(path_depth, path_color, is_raw_depth=path_depth.suffix.lower() in VALID_DEPTH_MAP_EXTENSIONS)
         )
 
     return image_sets
@@ -216,17 +264,18 @@ def create_point_cloud(
     depth: np.ndarray,
     intrinsics: list[float],
     color: np.ndarray = None,
-    use_image_center_as_principal_point: bool = False,
+    pcd_image_center_as_principal_point: bool = False,
 ) -> tuple:
     """
     Create a point cloud from depth map and camera intrinsics.
 
     Args:
         depth (np.ndarray): 2D depth map.
-        intrinsics (list[float]): Camera intrinsics [fx, fy, cx, cy]. cx and cy may be None.
+        intrinsics (list[float]): Camera intrinsics [fx, fy, cx, cy]. cx and cy may be None, in which case they are
+            assumed to be the center of the depth image.
         color (np.ndarray, optional): RGB image for coloring points.
-        use_image_center_as_principal_point (bool, optional): Whether to use the image center as the principal point
-            instead of the value provided in intrinsics.
+        pcd_image_center_as_principal_point (bool, optional): Whether to use the image center as the principal point instead
+            of the value provided in intrinsics.
 
     Returns:
         tuple: Arrays of vertices and colors (if RGB provided).
@@ -238,9 +287,9 @@ def create_point_cloud(
 
     # Convert to 3D points.
     fx, fy, cx, cy = intrinsics
-    if cx is None or use_image_center_as_principal_point:
+    if cx is None or pcd_image_center_as_principal_point:
         cx = width / 2
-    if cy is None or use_image_center_as_principal_point:
+    if cy is None or pcd_image_center_as_principal_point:
         cy = height / 2
 
     x = (u - cx) * depth / fx
@@ -261,7 +310,7 @@ def create_point_cloud(
     return points, colors
 
 
-def save_point_cloud(points: np.ndarray, colors: np.ndarray, filepath: Path) -> None:
+def save_point_cloud(points: np.ndarray, colors: np.ndarray, save_path: Path) -> None:
     """
     Save point cloud to PLY file.
 
@@ -295,123 +344,194 @@ def save_point_cloud(points: np.ndarray, colors: np.ndarray, filepath: Path) -> 
     header = "\n".join(header)
 
     # Save with header.
-    np.savetxt(filepath, data, fmt=fmt, header=header, comments="")
+    np.savetxt(save_path, data, fmt=fmt, header=header, comments="")
+
+
+def validate_depth_image(depth: np.ndarray) -> np.ndarray:
+    """
+    Validate and process a depth image to ensure it's in the correct format.
+
+    Args:
+        depth (np.ndarray): The depth image to validate.
+
+    Returns:
+        np.ndarray: The validated and processed depth image.
+
+    Raises:
+        RuntimeError: If the depth image has invalid format.
+    """
+    if depth.ndim > 2:
+        if all([dimsize > 1 for dimsize in depth.shape]):
+            # Check if all channels are identical.
+            first_channel = np.expand_dims(depth[..., 0], axis=-1)
+            if not np.all(np.all(depth == first_channel, axis=-1)):
+                raise RuntimeError(
+                    f"Multi-channel grayscale image with non-identical channels at input. Shape was {depth.shape}."
+                )
+            depth = first_channel.squeeze()
+        else:
+            # We have a 3D grayscale image with a single element along the third axis, so we can squeeze it.
+            depth = depth.squeeze()
+
+    return depth
+
+
+def load_depth_image(path: Path, depth_scale: float | dict, is_raw_depth: bool = False) -> np.ndarray:
+    """
+    Load and process a depth image from file.
+
+    Args:
+        path (Path): Path to the depth image.
+        depth_scale (float | dict): Scale factor to convert depth values to metric units.
+        is_raw_depth (bool, optional): Whether the file to load is a raw depth map (.npy).
+
+    Returns:
+        np.ndarray: The loaded and processed depth image.
+    """
+    if is_raw_depth:
+        # Load raw depth map directly.
+        depth = np.load(path.as_posix())
+    else:
+        # Load and scale depth image.
+        depth = cv2.imread(path.as_posix(), cv2.IMREAD_UNCHANGED)
+        if isinstance(depth_scale, dict):
+            depth_scale = depth_scale[path.name]
+        depth = depth / depth_scale
+
+    depth = validate_depth_image(depth)
+    return depth
+
+
+def load_color_image(path: Path) -> np.ndarray:
+    """
+    Load a color image from file.
+
+    Args:
+        path (Path): Path to the color image.
+
+    Returns:
+        np.ndarray: The loaded and converted color image.
+    """
+    return cv2.cvtColor(cv2.imread(path.as_posix()), cv2.COLOR_BGR2RGB)
+
+
+def save_run_config(save_path: Path, config_dict: dict) -> None:
+    """
+    Save the run configuration to a JSON file.
+
+    Args:
+        save_path (Path): Path to save the config file to. Must be either .json or .txt.
+        config_dict (dict): Dictionary containing the processed configuration parameters.
+    """
+    if not save_path.suffix in [".json", ".txt"]:
+        raise ValueError("Run config file must have .json or .txt extension.")
+    with open(save_path, "w") as f:
+        if save_path.suffix == ".json":
+            json.dump(config_dict, f, indent=4)
+        else:
+            longest_key_length = max(len(k) for k in config_dict.keys())
+            f.writelines(f"{k:<{longest_key_length + 1}}: {v}\n" for k, v in config_dict.items())
 
 
 def main():
     # Parse command line arguments.
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    args = parse()
+    args = parse_args()
 
     # Process arguments into local variables.
-    input_dir = Path(args.input_dir) if args.input_dir else None
-    depth_path = Path(args.depth) if args.depth else None
-    color_path = Path(args.color) if args.color else None
-    output_dir = Path(args.output_dir) if args.output_dir else Path("pcd") / timestamp
-    load_depth_maps = args.load_depth_maps
-    depth_scale_file = Path(args.depth_scale_file) if args.depth_scale_file else None
+    path_depth = Path(args.path_depth)
+    path_color = Path(args.path_color) if args.path_color else None
+    dir_output = Path(args.dir_output) if args.dir_output else None
+    load_depth_map = args.load_depth_map
     depth_scale = args.depth_scale
+    path_depth_scale = Path(args.path_depth_scale) if args.path_depth_scale else None
     intrinsics = args.intrinsics
     match_threshold = args.match_threshold
-    image_center_as_principal_point = args.image_center_as_principal_point
+    recursive_search_input_directories = args.recursive_search_input_directories
+    pcd_image_center_as_principal_point = args.pcd_image_center_as_principal_point
 
-    arguments_lines = f"""
+    # Check if we're dealing with files or directories and that all of them are either files/directories.
+    paths = [p for p in [path_depth, path_color] if p is not None]
+    are_input_paths_files = all(p.is_file() for p in paths)
+    are_input_paths_dirs = all(p.is_dir() for p in paths)
+
+    if not (are_input_paths_files or are_input_paths_dirs):
+        raise ValueError("Provided paths for depth and color images must be either all files or all directories.")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Setup the output directory.
+    if dir_output is not None:
+        dir_output = dir_output / timestamp
+    else:
+        dir_output = Path(f"pcd/{timestamp}")
+
+    run_config = {
+        "timestamp": timestamp,
+        "depth_path": path_depth.as_posix(),
+        "color_path": path_color.as_posix() if path_color else None,
+        "output_directory": dir_output.as_posix(),
+        "load_depth_map": load_depth_map,
+        "depth_scale": depth_scale,
+        "depth_scale_file": path_depth_scale.as_posix() if path_depth_scale else None,
+        "intrinsics": intrinsics,
+        "match_threshold": match_threshold,
+        "recursive_search_input_directories": recursive_search_input_directories,
+        "pcd_image_center_as_principal_point": pcd_image_center_as_principal_point,
+    }
+    longest_key_length = max(len(k) for k in run_config.keys())
+    arguments_text = dedent(
+        f"""
         --------------------------------------------------------------------------------
         ARGUMENTS
         --------------------------------------------------------------------------------
-        Input Directory                 : {input_dir.as_posix() if input_dir is not None else "NOT GIVEN"}
-        Depth Path                      : {depth_path.as_posix() if input_dir is None else "IGNORED"}
-        Color Path                      : {color_path.as_posix() if input_dir is None else "IGNORED"}
-        Output Directory                : {output_dir.as_posix()}
-        Load Depth Maps                 : {load_depth_maps}
-        Depth Scale File                : {depth_scale_file.as_posix() if depth_scale_file is not None else "NOT GIVEN"}
-        Depth Scale                     : {depth_scale if depth_scale_file is None else "IGNORED"}
-        Intrinsics                      : {intrinsics}
-        Match Threshold                 : {match_threshold}
-        Image Center as Principal Point : {image_center_as_principal_point}
+        {"\n".join(f"{k:<{longest_key_length + 1}}: {v}" for k, v in run_config.items())}
         ================================================================================
-    """
-    arguments_text = "\n".join(line.strip() for line in arguments_lines.split("\n"))
+        """
+    )
     print(arguments_text)
 
+    # Create output directory if it doesn't exist.
+    dir_output.mkdir(parents=True, exist_ok=True)
+    save_run_config(dir_output / "run_config.json", run_config)
+
     # Load the depth scale from the file if provided.
-    if depth_scale_file:
-        with open(depth_scale_file, "r") as f:
+    if path_depth_scale:
+        with open(path_depth_scale, "r") as f:
             depth_scale = json.load(f)
 
-    # Create output directory if it doesn't exist.
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Handle directory input case.
-    if input_dir:
-        image_sets = associate_images(
-            input_dir=input_dir, match_threshold=match_threshold, load_depth_maps=load_depth_maps
+    # Get image sets based on whether we're dealing with files or directories.
+    if are_input_paths_dirs:
+        image_sets = associate_images_for_pcd(
+            path_depth, dir_color=path_color, match_threshold=match_threshold, load_depth_map=load_depth_map, recursive=recursive_search_input_directories
         )
-        # Process each image set.
-        for i, image_set in enumerate(image_sets):
-            print(f"Processing image set {i+1}/{len(image_sets)}: {image_set.depth_path.name}")
-            # Read depth image.
-            if image_set.is_raw_depth:
-                # Load raw depth map directly.
-                depth = np.load(str(image_set.depth_path))
-            else:
-                # Load and scale depth image.
-                if isinstance(depth_scale, dict):
-                    depth_scale = depth_scale[image_set.depth_path.name]
-                depth = cv2.imread(str(image_set.depth_path), cv2.IMREAD_UNCHANGED) / depth_scale
-
-            if depth.ndim > 2:
-                if all([dimsize > 1 for dimsize in depth.shape]):
-                    # Check if all channels are identical.
-                    first_channel = np.expand_dims(depth[..., 0], axis=-1)
-                    if not np.all(np.all(depth == first_channel, axis=-1)):
-                        raise RuntimeError(
-                            "Multi-channel grayscale image with non-identical channels at input. Shape was"
-                            f" {depth.shape}."
-                        )
-                    depth = first_channel.squeeze()
-                else:
-                    # We have a 3D grayscale image with a single element along the third axis, so we can squeeze it.
-                    depth = depth.squeeze()
-
-            # Read color image if available.
-            color = None
-            if image_set.color_path:
-                color = cv2.imread(str(image_set.color_path))
-                color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
-
-            # Create and save point cloud.
-            points, colors = create_point_cloud(
-                depth, intrinsics, color, use_image_center_as_principal_point=image_center_as_principal_point
-            )
-            output_path = output_dir / f"{image_set.depth_path.stem}_pcd.ply"
-            save_point_cloud(points, colors, output_path)
-
-    # Handle single image input case.
+    elif are_input_paths_files:
+        # Single file case - create a single ImageSet.
+        image_sets = [
+            PcdImagePair(path_depth, path_color, is_raw_depth=path_depth.suffix.lower() in VALID_DEPTH_MAP_EXTENSIONS)
+        ]
     else:
-        # Read depth image.
-        is_raw_depth = depth_path.suffix.lower() in VALID_DEPTH_MAP_EXTENSIONS
-        if is_raw_depth:
-            # Load raw depth map directly.
-            depth = np.load(str(depth_path))
-        else:
-            # Load and scale depth image.
-            depth = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
-            if isinstance(depth_scale, dict):
-                depth_scale = depth_scale[depth_path.name]
-            depth = depth / depth_scale
+        raise ValueError("Invalid input paths.")
 
-        # Read color image if provided.
+    print(f"Found {len(image_sets)} images to process.")
+
+    # Process each image set.
+    for i, image_set in enumerate(image_sets):
+        print(f"Processing image set {i+1}/{len(image_sets)}: {image_set.path_depth.name}")
+
+        # Load depth image.
+        depth = load_depth_image(
+            path=image_set.path_depth, depth_scale=depth_scale, is_raw_depth=image_set.is_raw_depth
+        )
+
+        # Read color image if available.
         color = None
-        if color_path:
-            color = cv2.imread(str(color_path))
-            color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+        if image_set.path_color:
+            color = load_color_image(image_set.path_color)
 
         # Create and save point cloud.
         points, colors = create_point_cloud(
-            depth, intrinsics, color, use_image_center_as_principal_point=image_center_as_principal_point
+            depth, intrinsics, color, pcd_image_center_as_principal_point=pcd_image_center_as_principal_point
         )
-        output_path = output_dir / f"{depth_path.stem}_pcd.ply"
+        output_path = dir_output / f"{image_set.path_depth.stem}_pcd.ply"
         save_point_cloud(points, colors, output_path)
 
 
