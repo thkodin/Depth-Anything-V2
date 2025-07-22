@@ -5,10 +5,10 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from textwrap import dedent
-from warnings import warn
 
 import cv2
 import numpy as np
+import plyfile
 from natsort import natsorted
 
 VALID_IMG_EXTENSIONS = {".png", ".jpg", ".jpeg"}
@@ -123,6 +123,7 @@ def parse_args():
 
     return args
 
+
 def directory_tree_search(path: Path, extensions: set[str] | None = None, recursive: bool = True):
     """
     Iteratively search for all files with the specified extensions in the directory tree.
@@ -157,6 +158,7 @@ def directory_tree_search(path: Path, extensions: set[str] | None = None, recurs
             raise RuntimeError(f"is not file or directory: {item}")
 
     return filenames
+
 
 def find_best_path_name_match(target: str, candidates: list[str], match_threshold: float = 0.1) -> str | None:
     """
@@ -207,7 +209,11 @@ def find_best_path_name_match(target: str, candidates: list[str], match_threshol
 
 
 def associate_images_for_pcd(
-    dir_depth: Path, dir_color: Path | None = None, match_threshold: float = 0.5, load_depth_map: bool = False, recursive: bool = True
+    dir_depth: Path,
+    dir_color: Path | None = None,
+    match_threshold: float = 0.5,
+    load_depth_map: bool = False,
+    recursive: bool = True,
 ) -> list[PcdImagePair]:
     """
     Find any corresponding color images given depth images in the input directory.
@@ -271,80 +277,73 @@ def create_point_cloud(
 
     Args:
         depth (np.ndarray): 2D depth map.
-        intrinsics (list[float]): Camera intrinsics [fx, fy, cx, cy]. cx and cy may be None, in which case they are
-            assumed to be the center of the depth image.
+        intrinsics (list[float]): Camera intrinsics [fx, fy, cx, cy]. cx and cy may be None.
         color (np.ndarray, optional): RGB image for coloring points.
-        pcd_image_center_as_principal_point (bool, optional): Whether to use the image center as the principal point instead
-            of the value provided in intrinsics.
+        pcd_image_center_as_principal_point (bool, optional): Use image center as principal point.
 
     Returns:
         tuple: Arrays of vertices and colors (if RGB provided).
     """
-
-    # Create mesh grid of pixel coordinates.
     height, width = depth.shape
-    u, v = np.meshgrid(np.arange(width), np.arange(height))
-
-    # Convert to 3D points.
     fx, fy, cx, cy = intrinsics
+
+    # Use image center as principal point if specified or cx/cy is None
     if cx is None or pcd_image_center_as_principal_point:
         cx = width / 2
     if cy is None or pcd_image_center_as_principal_point:
         cy = height / 2
 
-    x = (u - cx) * depth / fx
-    y = (v - cy) * depth / fy
-    z = depth
+    # Create coordinate grids in a memory-efficient way
+    u_grid, v_grid = np.meshgrid(
+        np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32), indexing="xy", sparse=True
+    )
 
-    # Stack coordinates.
-    points = np.column_stack([x.flatten(), y.flatten(), z.flatten()])
-    mask = points[:, 2] > 0
+    # Compute 3D coordinates in-place
+    z = depth.astype(np.float32)
+    x = (u_grid - cx) * z / fx
+    y = (v_grid - cy) * z / fy
 
-    # Filter out the points with no depth.
-    points = points[mask]
+    # Mask valid points (z > 0)
+    mask = z > 0
+    points = np.stack([x[mask], y[mask], z[mask]], axis=-1)
+
+    # Handle colors if provided
     colors = None
     if color is not None:
-        colors = color.reshape(-1, 3)
-        colors = colors[mask]
+        colors = color[mask].astype(np.uint8)
 
     return points, colors
 
 
 def save_point_cloud(points: np.ndarray, colors: np.ndarray, save_path: Path) -> None:
     """
-    Save point cloud to PLY file.
+    Save point cloud to PLY file in binary format.
 
     Args:
-        points (np.ndarray): Point coordinates.
-        colors (np.ndarray): Point colors.
-        filepath (Path): Output filepath.
+        points (np.ndarray): Point coordinates (N, 3).
+        colors (np.ndarray): Point colors (N, 3) or None.
+        save_path (Path): Output filepath.
     """
-    # Prepare data for writing.
+    # Define vertex dtype
+    dtype = [("x", "f4"), ("y", "f4"), ("z", "f4")]
     if colors is not None:
-        data = np.hstack([points, colors])
-        fmt = "%.6f %.6f %.6f %d %d %d"
-    else:
-        data = points
-        fmt = "%.6f %.6f %.6f"
+        dtype.extend([("red", "u1"), ("green", "u1"), ("blue", "u1")])
 
-    # Write header and data in a single operation.
-    header = [
-        "ply",
-        "format ascii 1.0",
-        f"element vertex {len(points)}",
-        "property float x",
-        "property float y",
-        "property float z",
-    ]
-
+    # Create structured array
+    n = len(points)
+    vertex = np.empty(n, dtype=dtype)
+    vertex["x"] = points[:, 0]
+    vertex["y"] = points[:, 1]
+    vertex["z"] = points[:, 2]
     if colors is not None:
-        header.extend(["property uchar red", "property uchar green", "property uchar blue"])
+        vertex["red"] = colors[:, 0]
+        vertex["green"] = colors[:, 1]
+        vertex["blue"] = colors[:, 2]
 
-    header.append("end_header")
-    header = "\n".join(header)
-
-    # Save with header.
-    np.savetxt(save_path, data, fmt=fmt, header=header, comments="")
+    # Create PLY element and write to file
+    el = plyfile.PlyElement.describe(vertex, "vertex")
+    with open(save_path, "wb") as f:
+        plyfile.PlyData([el], text=False).write(f)
 
 
 def validate_depth_image(depth: np.ndarray) -> np.ndarray:
@@ -423,7 +422,7 @@ def save_run_config(save_path: Path, config_dict: dict) -> None:
         save_path (Path): Path to save the config file to. Must be either .json or .txt.
         config_dict (dict): Dictionary containing the processed configuration parameters.
     """
-    if not save_path.suffix in [".json", ".txt"]:
+    if save_path.suffix not in [".json", ".txt"]:
         raise ValueError("Run config file must have .json or .txt extension.")
     with open(save_path, "w") as f:
         if save_path.suffix == ".json":
@@ -478,15 +477,14 @@ def main():
         "pcd_image_center_as_principal_point": pcd_image_center_as_principal_point,
     }
     longest_key_length = max(len(k) for k in run_config.keys())
-    arguments_text = dedent(
-        f"""
-        --------------------------------------------------------------------------------
-        ARGUMENTS
-        --------------------------------------------------------------------------------
-        {"\n".join(f"{k:<{longest_key_length + 1}}: {v}" for k, v in run_config.items())}
-        ================================================================================
-        """
-    )
+    arguments_lines = [
+        "--------------------------------------------------------------------------------",
+        "ARGUMENTS",
+        "--------------------------------------------------------------------------------",
+    ]
+    arguments_lines += [f"{k:<{longest_key_length + 1}}: {v}" for k, v in run_config.items()]
+    arguments_lines.append("================================================================================")
+    arguments_text = dedent("\n".join(arguments_lines))
     print(arguments_text)
 
     # Create output directory if it doesn't exist.
@@ -501,7 +499,11 @@ def main():
     # Get image sets based on whether we're dealing with files or directories.
     if are_input_paths_dirs:
         image_sets = associate_images_for_pcd(
-            path_depth, dir_color=path_color, match_threshold=match_threshold, load_depth_map=load_depth_map, recursive=recursive_search_input_directories
+            path_depth,
+            dir_color=path_color,
+            match_threshold=match_threshold,
+            load_depth_map=load_depth_map,
+            recursive=recursive_search_input_directories,
         )
     elif are_input_paths_files:
         # Single file case - create a single ImageSet.

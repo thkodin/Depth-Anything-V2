@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from textwrap import dedent
-from warnings import warn
 
 import cv2
 import numpy as np
@@ -130,7 +128,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--intrinsics",
         type=float,
-        nargs="*",
+        nargs="+",
         help=(
             "Camera intrinsics [fx, fy, cx, cy] in that order. If one argument provided, fx and fy are both set equal"
             " to it and cx and cy are inferred from the image dimensions (width and height respectively). If 2 are"
@@ -521,7 +519,7 @@ def save_run_config(save_path: Path, config_dict: dict) -> None:
         save_path (Path): Path to save the config file to. Must be either .json or .txt.
         config_dict (dict): Dictionary containing the processed configuration parameters.
     """
-    if not save_path.suffix in [".json", ".txt"]:
+    if save_path.suffix not in [".json", ".txt"]:
         raise ValueError("Run config file must have .json or .txt extension.")
     with open(save_path, "w") as f:
         if save_path.suffix == ".json":
