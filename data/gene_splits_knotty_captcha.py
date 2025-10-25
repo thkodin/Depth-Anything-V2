@@ -1,6 +1,10 @@
 """
 Split a dataset of blender renders into train/val/test splits for fine-tuning models.
 
+WARNING: This will directly modify the input directory by moving files around. You can always get back the original
+directory structure by combining all splits into the same directory, but it is recommended to keep a copy of the
+original structure.
+
 The split knotty_captcha dataset will look like this (containing color, depth, and normal images):
 
 knotty_captcha/
@@ -24,7 +28,7 @@ from natsort import natsorted
 
 # The root data for images is the directory containing the images.
 REPO_ROOT = Path(__file__).parents[1]
-DIR_DATA_ROOT = REPO_ROOT / "data" / "knotty_captcha"
+DIR_DATA_ROOT = REPO_ROOT / "data" / "centered_y_renders_similar_size_depth_constrained"
 VALID_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 
 COLOR_IMAGE_SUFFIX = "_color"
@@ -73,9 +77,9 @@ def split_dataset(
     depth_dir = base_dir / "depth"
     normal_dir = base_dir / "normal"
 
-    if not color_dir.exists() or not any(color_dir.glob(f"*{ext}" for ext in VALID_IMAGE_EXTENSIONS)):
+    if not color_dir.exists() or not any(color_dir.glob(f"*{ext}") for ext in VALID_IMAGE_EXTENSIONS):
         raise ValueError("Color directory does not exist or does not contain any valid images.")
-    if not depth_dir.exists() or not any(depth_dir.glob(f"*{ext}" for ext in VALID_IMAGE_EXTENSIONS)):
+    if not depth_dir.exists() or not any(depth_dir.glob(f"*{ext}") for ext in VALID_IMAGE_EXTENSIONS):
         raise ValueError("Depth directory does not exist or does not contain any valid images.")
 
     color_images = natsorted(

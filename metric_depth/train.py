@@ -68,7 +68,13 @@ def main():
     elif args.dataset == "vkitti":
         trainset = VKITTI2("dataset/splits/vkitti2/train.txt", "train", size=size)
     elif args.dataset == "knotty_captcha":
-        trainset = KnottyCaptcha("dataset/splits/knotty_captcha/train.txt", "train", size=size)
+        # Modify the path for any variants of the dataset and the depth scale factor below.
+        trainset = KnottyCaptcha(
+            "dataset/splits/centered_y_renders_similar_size_depth_constrained/train.txt",
+            "train",
+            size=size,
+            depth_scale_factor=2340.535714285714,
+        )
     else:
         raise NotImplementedError
     trainsampler = torch.utils.data.distributed.DistributedSampler(trainset) if is_distributed else None
@@ -87,7 +93,13 @@ def main():
     elif args.dataset == "vkitti":
         valset = KITTI("dataset/splits/kitti/val.txt", "val", size=size)
     elif args.dataset == "knotty_captcha":
-        valset = KnottyCaptcha("dataset/splits/knotty_captcha/val.txt", "val", size=size)
+        # Modify the path for any variants of the dataset and the depth scale factor below.
+        valset = KnottyCaptcha(
+            "dataset/splits/centered_y_renders_similar_size_depth_constrained/val.txt",
+            "val",
+            size=size,
+            depth_scale_factor=2340.535714285714,
+        )
     else:
         raise NotImplementedError
     valsampler = torch.utils.data.distributed.DistributedSampler(valset) if is_distributed else None
@@ -152,6 +164,10 @@ def main():
         "log10": 100,
         "silog": 100,
     }
+
+    # Track best metrics for model saving.
+    best_total_loss = float("inf")
+    best_abs_rel = float("inf")
 
     for epoch in range(args.epochs):
         if rank == 0:
@@ -232,7 +248,6 @@ def main():
         nsamples = torch.tensor([0.0]).cuda()
 
         for i, sample in enumerate(valloader):
-
             img, depth, valid_mask = (
                 sample["image"].cuda().float(),
                 sample["depth"].cuda()[0],
@@ -281,13 +296,33 @@ def main():
                 previous_best[k] = min(previous_best[k], (results[k] / nsamples).item())
 
         if rank == 0:
+            # Calculate average total loss for this epoch.
+            avg_total_loss = total_loss / len(trainloader)
+            current_abs_rel = (results["abs_rel"] / nsamples).item()
+
             checkpoint = {
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "epoch": epoch,
                 "previous_best": previous_best,
+                "total_loss": avg_total_loss,
+                "abs_rel": current_abs_rel,
             }
+
+            # Always save the latest model.
             torch.save(checkpoint, os.path.join(args.save_path, "latest.pth"))
+
+            # Save best model based on total_loss (lowest is best).
+            if avg_total_loss < best_total_loss:
+                best_total_loss = avg_total_loss
+                torch.save(checkpoint, os.path.join(args.save_path, "best_total_loss.pth"))
+                logger.info(f"New best total_loss model saved: {best_total_loss:.6f}")
+
+            # Save best model based on abs_rel (lowest is best).
+            if current_abs_rel < best_abs_rel:
+                best_abs_rel = current_abs_rel
+                torch.save(checkpoint, os.path.join(args.save_path, "best_abs_rel.pth"))
+                logger.info(f"New best abs_rel model saved: {best_abs_rel:.6f}")
 
 
 if __name__ == "__main__":

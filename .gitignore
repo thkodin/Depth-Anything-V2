@@ -1,12 +1,17 @@
+*.zip
+
 **/*data/**/
 **/*checkpoints/
 **/*exp/
 **/*results/
 
+metric_depth/inference
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
 
 # C extensions
 *.so

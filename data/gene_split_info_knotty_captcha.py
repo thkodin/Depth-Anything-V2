@@ -32,7 +32,7 @@ from tqdm import tqdm
 
 
 def main():
-    DATASET_NAME = "knotty_captcha"
+    DATASET_NAME = "centered_y_renders_similar_size_depth_constrained"
     ROOT_REPO = Path(__file__).parents[1]
     DIR_DATASET = ROOT_REPO / "data" / DATASET_NAME
     DIR_OUTPUT = ROOT_REPO / "metric_depth" / "dataset" / "splits" / DATASET_NAME

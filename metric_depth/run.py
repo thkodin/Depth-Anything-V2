@@ -246,11 +246,12 @@ def find_best_path_name_match(target: str, candidates: list[str], match_threshol
         return None
 
     # Only match filename based on stem (no extensions).
-    target_stem = Path(target).stem
+    target_stem = Path(target).stem.replace("depth", "").replace("color", "")
 
     # Check for exact match first.
     for candidate in candidates:
-        if Path(candidate).stem == target_stem:
+        candidate_stem = Path(candidate).stem.replace("depth", "").replace("color", "")
+        if candidate_stem == target_stem:
             return candidate
 
     # If no exact match, proceed with fuzzy matching.
@@ -258,7 +259,7 @@ def find_best_path_name_match(target: str, candidates: list[str], match_threshol
     best_match = None
 
     for candidate in candidates:
-        candidate_stem = Path(candidate).stem
+        candidate_stem = Path(candidate).stem.replace("depth", "").replace("color", "")
         ratio = SequenceMatcher(None, target_stem, candidate_stem).ratio()
         # if ratio == best_ratio and best_match is not None:
         #     warn(
@@ -269,6 +270,7 @@ def find_best_path_name_match(target: str, candidates: list[str], match_threshol
         if ratio > best_ratio:
             best_ratio = ratio
             best_match = candidate
+            break
 
     # Only return match if similarity is high enough.
     return best_match if best_ratio > match_threshold else None
@@ -314,8 +316,8 @@ def associate_images_for_eval(
     image_sets = []
     for path_color in paths_color:
         path_depth = None
-
         if paths_depth:
+            # Replace identifiers like "depth" and "color" with empty strings while associating.
             matched_path_depth = find_best_path_name_match(
                 path_color.name, [f.name for f in paths_depth], match_threshold=match_threshold
             )
@@ -530,7 +532,6 @@ def save_run_config(save_path: Path, config_dict: dict) -> None:
 
 
 if __name__ == "__main__":
-
     args = parse_args()
 
     model_configs = {
